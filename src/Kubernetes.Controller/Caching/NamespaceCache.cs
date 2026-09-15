@@ -7,7 +7,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Security.Cryptography.X509Certificates;
 using Yarp.Kubernetes.Controller.Services;
 
 namespace Yarp.Kubernetes.Controller.Caching;
@@ -30,7 +29,6 @@ public class NamespaceCache
         ArgumentNullException.ThrowIfNull(ingress);
 
         var serviceNames = ImmutableList<string>.Empty;
-
 
         if (eventType == WatchEventType.Added || eventType == WatchEventType.Modified)
         {
@@ -59,9 +57,7 @@ public class NamespaceCache
             }
 
         }
-
         var ingressName = ingress.Name();
-        var ingressNamespacedName = NamespacedName.From(ingress);
         lock (_sync)
         {
             var serviceNamesPrevious = ImmutableList<string>.Empty;

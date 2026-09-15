@@ -9,7 +9,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Security.Cryptography.X509Certificates;
 using Yarp.Kubernetes.Controller.Certificates;
 using Yarp.Kubernetes.Controller.Services;
 
