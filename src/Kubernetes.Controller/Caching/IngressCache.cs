@@ -100,12 +100,10 @@ public class IngressCache : ICache
         var namespacedName = NamespacedName.From(secret);
         _logger.LogDebug("Found secret '{NamespacedName}'. Checking against default {CertificateSecretName}", namespacedName, _options.DefaultSslCertificate);
 
-        if (!string.Equals(namespacedName.ToString(), _options.DefaultSslCertificate, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(namespacedName.ToString(), _options.DefaultSslCertificate, StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            _logger.LogInformation("Found secret `{NamespacedName}` to use as default certificate for HTTPS traffic", namespacedName);
         }
-
-        _logger.LogInformation("Found secret `{NamespacedName}` to use as default certificate for HTTPS traffic", namespacedName);
 
         var certificate = _certificateHelper.ConvertCertificate(namespacedName, secret);
         if (certificate is null)
