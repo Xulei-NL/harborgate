@@ -48,41 +48,40 @@ internal class ServerCertificateSelector : IServerCertificateSelector
 
     public X509Certificate2 GetCertificate(ConnectionContext connectionContext, string domainName)
     {
+        string chosenCertificateReason;
+        X509Certificate2 chosenCertificate;
+
         lock (_sync)
         {
             if (string.IsNullOrEmpty(domainName))
             {
-                _logger.LogDebug("No SNI domain name was provided. using default certificate.");
-                return _defaultCertificate;
+                chosenCertificateReason = "no-sni";
+                TryGetDefaultCertificate(out chosenCertificate);
             }
-
-            if (TryGetExactMatchCertificate(domainName, out var chosenCertificate))
+            else if (TryGetExactMatchCertificate(domainName, out chosenCertificate))
             {
-                return chosenCertificate;
+                chosenCertificateReason = "exact-match";
             }
-
-            if (TryGetWildcardCertificate(domainName, out chosenCertificate))
+            else if (TryGetWildcardCertificate(domainName, out chosenCertificate))
             {
-                return chosenCertificate;
+                chosenCertificateReason = "wildcard";
             }
-
-            _logger.LogDebug($"Using catch all certificate.");
-
-            if (TryGetCatchAllCertificate(out chosenCertificate))
+            else if (TryGetCatchAllCertificate(out chosenCertificate))
             {
-                return chosenCertificate;
+                chosenCertificateReason = "catch-all";
             }
-
-            _logger.LogDebug($"No certificate matched {domainName}; using default certificate.");
-
-            if (TryGetDefaultCertificate(out chosenCertificate))
+            else if (TryGetDefaultCertificate(out chosenCertificate))
             {
-                return chosenCertificate;
+                chosenCertificateReason = "default";
             }
-
-            _logger.LogWarning($"No default certificate is loaded yet; cannot complete TLS for {domainName}");
-            return null;
+            else
+            {
+                chosenCertificateReason = "none";
+            }
         }
+
+        _logger.LogDebug($"Choose certificate for domain '{domainName}' because of reason '{chosenCertificateReason}'");
+        return chosenCertificate;
     }
 
     private bool TryGetWildcardCertificate(string domainName, out X509Certificate2 certificate)
