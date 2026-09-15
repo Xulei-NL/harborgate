@@ -45,7 +45,6 @@ internal class ServerCertificateSelector : IServerCertificateSelector
         }
     }
 
-
     public X509Certificate2 GetCertificate(ConnectionContext connectionContext, string domainName)
     {
         lock (_sync)
@@ -62,6 +61,13 @@ internal class ServerCertificateSelector : IServerCertificateSelector
             }
 
             if (TryGetWildcardCertificate(domainName, out chosenCertificate))
+            {
+                return chosenCertificate;
+            }
+
+            _logger.LogDebug($"Using catch all certificate.");
+
+            if (TryGetCatchAllCertificate(out chosenCertificate))
             {
                 return chosenCertificate;
             }
@@ -90,6 +96,24 @@ internal class ServerCertificateSelector : IServerCertificateSelector
 
         certificate = wildcardCertificate;
         return true;
+    }
+
+    private bool TryGetCatchAllCertificate(out X509Certificate2 certificate)
+    {
+        certificate = null;
+
+        foreach (var namespacedName in _catchAllTlsCache)
+        {
+            if (!_certificateCache.TryGetValue(namespacedName, out var catchAllCertificate))
+            {
+                continue;
+            }
+
+            certificate = catchAllCertificate;
+            return true;
+        }
+
+        return false;
     }
 
     private bool TryGetDefaultCertificate(out X509Certificate2 certificate)
