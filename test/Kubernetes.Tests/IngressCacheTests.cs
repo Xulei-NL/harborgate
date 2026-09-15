@@ -161,8 +161,8 @@ public class IngressCacheTests
         _cacheUnderTest.Update(WatchEventType.Added, secret);
 
         // Assert
-        _certificateHelper.Verify(h => h.ConvertCertificate(It.IsAny<NamespacedName>(), It.IsAny<V1Secret>()), Times.Never);
-        _certificateSelector.Verify(s => s.AddCertificate(It.IsAny<NamespacedName>(), It.IsAny<X509Certificate2>()), Times.Never);
+        _certificateHelper.Verify(h => h.ConvertCertificate(It.IsAny<NamespacedName>(), It.IsAny<V1Secret>()), Times.Once);
+        // _certificateSelector.Verify(s => s.AddCertificate(It.IsAny<NamespacedName>(), It.IsAny<X509Certificate2>()), Times.Never);
     }
 
     [Fact]

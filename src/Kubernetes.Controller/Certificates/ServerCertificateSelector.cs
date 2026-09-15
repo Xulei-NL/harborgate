@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Security.Cryptography.X509Certificates;
 using k8s;
 using k8s.Models;
@@ -141,6 +142,87 @@ internal class ServerCertificateSelector : IServerCertificateSelector
         }
     }
 
+    private void AddIngressTls(V1Ingress ingress)
+    {
+        var ingressNamespacedName = NamespacedName.From(ingress);
+
+        var ingressTlsProperties = new List<IngressTlsProperty>();
+
+        foreach (var tls in ingress.Spec?.Tls ?? [])
+        {
+            var certificateSecretName = tls.SecretName;
+            if (string.IsNullOrWhiteSpace(certificateSecretName))
+            {
+                // Fall back to using default certificate so no need to read the TLS host name configurations.
+                continue;
+            }
+
+            var secretNamespacedName = new NamespacedName(ingress.Namespace(), certificateSecretName);
+
+            var hostNames = tls.Hosts;
+            if (hostNames is null)
+            {
+                // Fall back to using catch-all certificate.
+                _catchAllTlsCache.Add(secretNamespacedName);
+                ingressTlsProperties.Add(new IngressTlsProperty(
+                    Type: IngressTlsType.CatchAllCertificate,
+                    SecretNamespacedName: secretNamespacedName, HostName: null));
+                continue;
+            }
+
+            foreach (var hostName in hostNames)
+            {
+                if (_hostNameTlsCache.TryGetValue(hostName, out var secretNamespacedNames))
+                {
+                    secretNamespacedNames.Add(secretNamespacedName);
+                }
+                else
+                {
+                    _hostNameTlsCache[hostName] = [secretNamespacedName];
+                }
+
+                ingressTlsProperties.Add(new IngressTlsProperty(Type: IngressTlsType.NormalCertificate,
+                    SecretNamespacedName: secretNamespacedName, HostName: hostName));
+            }
+        }
+
+        _ingressTlsCache[ingressNamespacedName] =
+            new IngressTlsPropertyTracker(ingressTlsProperties.ToImmutableArray());
+    }
+
+    private void DeleteIngressTls(V1Ingress ingress)
+    {
+        var ingressNamespacedName = NamespacedName.From(ingress);
+
+        if (_ingressTlsCache.TryGetValue(ingressNamespacedName,
+                out var certificateSecretAndHostNames))
+        {
+            foreach (var (tlsType, secretNamespacedName, hostName) in certificateSecretAndHostNames
+                         .IngressTlsProperties)
+            {
+                switch (tlsType)
+                {
+                    case IngressTlsType.CatchAllCertificate:
+                        _catchAllTlsCache.Remove(secretNamespacedName);
+                        break;
+                    case IngressTlsType.NormalCertificate:
+                        if (_hostNameTlsCache.TryGetValue(hostName, out var secretNames))
+                        {
+                            secretNames.Remove(secretNamespacedName);
+                            if (secretNames.Count == 0)
+                            {
+                                _hostNameTlsCache.Remove(hostName);
+                            }
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        _ingressTlsCache.Remove(ingressNamespacedName);
+    }
+
     public void UpdateIngressTls(WatchEventType eventType, V1Ingress ingress)
     {
         var ingressNamespacedName = NamespacedName.From(ingress);
@@ -149,83 +231,15 @@ internal class ServerCertificateSelector : IServerCertificateSelector
         {
             switch (eventType)
             {
+                // Deletes ingress tls configuration first to prevent potential duplicate events.
                 case WatchEventType.Added:
                 case WatchEventType.Modified:
-                    {
-                        var ingressTlsProperties = new List<IngressTlsProperty>();
-
-                        foreach (var tls in ingress.Spec?.Tls ?? [])
-                        {
-                            var certificateSecretName = tls.SecretName;
-                            if (string.IsNullOrWhiteSpace(certificateSecretName))
-                            {
-                                // Fall back to using default certificate so no need to read the TLS host name configurations.
-                                continue;
-                            }
-
-                            var secretNamespacedName = new NamespacedName(ingress.Namespace(), certificateSecretName);
-
-                            var hostNames = tls.Hosts;
-                            if (hostNames is null)
-                            {
-                                // Fall back to using catch-all certificate.
-                                _catchAllTlsCache.Add(secretNamespacedName);
-                                ingressTlsProperties.Add(new IngressTlsProperty(
-                                    Type: IngressTlsType.CatchAllCertificate,
-                                    SecretNamespacedName: secretNamespacedName, HostName: null));
-                                continue;
-                            }
-
-                            foreach (var hostName in hostNames)
-                            {
-                                if (_hostNameTlsCache.TryGetValue(hostName, out var secretNamespacedNames))
-                                {
-                                    secretNamespacedNames.Add(secretNamespacedName);
-                                }
-                                else
-                                {
-                                    _hostNameTlsCache[hostName] = [secretNamespacedName];
-                                }
-
-                                ingressTlsProperties.Add(new IngressTlsProperty(Type: IngressTlsType.NormalCertificate,
-                                    SecretNamespacedName: secretNamespacedName, HostName: hostName));
-                            }
-                        }
-
-                        _ingressTlsCache[ingressNamespacedName] = new IngressTlsPropertyTracker(ingressTlsProperties);
-                        break;
-                    }
+                    DeleteIngressTls(ingress);
+                    AddIngressTls(ingress);
+                    break;
                 case WatchEventType.Deleted:
-                    {
-                        if (_ingressTlsCache.TryGetValue(ingressNamespacedName,
-                                out var certificateSecretAndHostNames))
-                        {
-                            foreach (var (tlsType, secretNamespacedName, hostName) in certificateSecretAndHostNames
-                                         .IngressTlsProperties ?? [])
-                            {
-                                switch (tlsType)
-                                {
-                                    case IngressTlsType.CatchAllCertificate:
-                                        _catchAllTlsCache.Remove(secretNamespacedName);
-                                        break;
-                                    case IngressTlsType.NormalCertificate:
-                                        if (_hostNameTlsCache.TryGetValue(hostName, out var secretNames))
-                                        {
-                                            secretNames.Remove(secretNamespacedName);
-                                            if (secretNames.Count == 0)
-                                            {
-                                                _hostNameTlsCache.Remove(hostName);
-                                            }
-                                        }
-
-                                        break;
-                                }
-                            }
-                        }
-
-                        _ingressTlsCache.Remove(ingressNamespacedName);
-                        break;
-                    }
+                    DeleteIngressTls(ingress);
+                    break;
                 case WatchEventType.Error:
                 case WatchEventType.Bookmark:
                     break;
