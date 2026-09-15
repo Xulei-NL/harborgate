@@ -25,16 +25,6 @@ public class NamespaceCache
     private readonly Dictionary<string, ServiceData> _serviceData = new Dictionary<string, ServiceData>();
     private readonly Dictionary<string, Endpoints> _endpointsData = new Dictionary<string, Endpoints>();
 
-    private readonly List<NamespacedName> _catchAllCertificateSecrets  =
-        new List<NamespacedName>();
-    private readonly Dictionary<string, List<NamespacedName>> _hostNameToCertificateSecrets =
-        new Dictionary<string, List<NamespacedName>>();
-    private readonly Dictionary<NamespacedName, X509Certificate2> _certificateSecretToRealCertificates =
-        new Dictionary<NamespacedName, X509Certificate2>();
-    private readonly Dictionary<NamespacedName, IReadOnlyList<((int, NamespacedName), string)>> _ingressToCertificateSecretAndHostNames =
-        new Dictionary<NamespacedName, IReadOnlyList<((int, NamespacedName), string)>>();
-
-
     public void Update(WatchEventType eventType, V1Ingress ingress)
     {
         ArgumentNullException.ThrowIfNull(ingress);
@@ -90,38 +80,6 @@ public class NamespaceCache
                     serviceNamesPrevious = ImmutableList<string>.Empty;
                     _ingressToServiceNames.Add(ingressName, serviceNames);
                 }
-
-                var certificateSecretAndHostNames = new List<((int, NamespacedName secretNamespacedName), string)>();
-
-                foreach (var tls in ingress.Spec?.Tls ?? [])
-                {
-                    var certificateSecretName = tls.SecretName;
-                    if (string.IsNullOrWhiteSpace(certificateSecretName))
-                    {
-                        // Fall back to using default certificate so no need to read the TLS host name configurations.
-                        continue;
-                    }
-
-                    var secretNamespacedName = new NamespacedName(ingress.Namespace(), certificateSecretName);
-
-                    var hostNames = tls.Hosts;
-                    if (hostNames is null)
-                    {
-                        // Fall back to using catch-all certificate.
-                        _catchAllCertificateSecrets.Add(secretNamespacedName);
-                        certificateSecretAndHostNames.Add(((1, secretNamespacedName), ""));
-                        continue;
-                    }
-
-                    foreach (var hostName in hostNames)
-                    {
-                        _hostNameToCertificateSecrets.AddToValuesWithKey(hostName, secretNamespacedName);
-                        certificateSecretAndHostNames.Add(((2, secretNamespacedName), hostName));
-                    }
-                }
-
-                _ingressToCertificateSecretAndHostNames[ingressNamespacedName] = certificateSecretAndHostNames;
-
             }
             else if (eventType == WatchEventType.Deleted)
             {
@@ -133,24 +91,6 @@ public class NamespaceCache
                 {
                     _ingressToServiceNames.Remove(ingressName);
                 }
-
-                if (_ingressToCertificateSecretAndHostNames.TryGetValue(ingressNamespacedName,
-                        out var certificateSecretAndHostNames))
-                {
-                    foreach (var ((type, certificateSecretName), hostName) in certificateSecretAndHostNames ?? [])
-                    {
-                        if (_hostNameToCertificateSecrets.TryGetValue(hostName, out var secretNames))
-                        {
-                            secretNames.Remove(certificateSecretName);
-                            if (secretNames.Count == 0)
-                            {
-                                _hostNameToCertificateSecrets.Remove(hostName);
-                            }
-                        }
-                    }
-                }
-
-                _ingressToCertificateSecretAndHostNames.Remove(ingressNamespacedName);
             }
 
             // update cross-reference for new ingress-to-services linkage not previously known

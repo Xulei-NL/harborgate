@@ -84,7 +84,7 @@ internal class ServerCertificateSelector : IServerCertificateSelector
         return false;
     }
 
-    private static string? ConstructWildcardDomainName(string domainName)
+    private static string ConstructWildcardDomainName(string domainName)
     {
         var firstDotIndex = domainName.IndexOf('.');
 
