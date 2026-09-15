@@ -3,7 +3,7 @@
 
 using System.Collections.Generic;
 
-namespace Yarp.Kubernetes.Controller.Caching;
+namespace Yarp.Kubernetes.Controller.Certificates;
 
 public enum IngressTlsType
 {
