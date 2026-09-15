@@ -55,8 +55,8 @@ public class NamespaceCache
                     }
                 }
             }
-
         }
+
         var ingressName = ingress.Name();
         lock (_sync)
         {
