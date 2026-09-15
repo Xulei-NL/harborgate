@@ -2,6 +2,8 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Security.Cryptography.X509Certificates;
+using k8s;
+using k8s.Models;
 using Microsoft.AspNetCore.Connections;
 
 namespace Yarp.Kubernetes.Controller.Certificates;
@@ -31,4 +33,6 @@ public interface IServerCertificateSelector
     /// </summary>
     /// <param name="certificateName">An identifier for the certificate that can be used to remove it.</param>
     void RemoveCertificate(NamespacedName certificateName);
+
+    void UpdateIngressTls(WatchEventType eventType, V1Ingress ingress);
 }

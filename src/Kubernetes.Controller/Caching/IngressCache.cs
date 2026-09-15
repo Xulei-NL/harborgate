@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Security.Cryptography.X509Certificates;
 using Yarp.Kubernetes.Controller.Certificates;
 using Yarp.Kubernetes.Controller.Services;
 
@@ -77,6 +78,9 @@ public class IngressCache : ICache
         ArgumentNullException.ThrowIfNull(ingress);
 
         Namespace(ingress.Namespace()).Update(eventType, ingress);
+
+        _certificateSelector.UpdateIngressTls(eventType, ingress);
+
         return true;
     }
 
