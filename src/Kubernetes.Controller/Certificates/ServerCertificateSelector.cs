@@ -102,9 +102,9 @@ internal class ServerCertificateSelector : IServerCertificateSelector
     {
         certificate = null;
 
-        foreach (var namespacedName in _catchAllTlsCache)
+        foreach (var secretNamespacedName in _catchAllTlsCache)
         {
-            if (!_certificateCache.TryGetValue(namespacedName, out var catchAllCertificate))
+            if (!_certificateCache.TryGetValue(secretNamespacedName, out var catchAllCertificate))
             {
                 continue;
             }
@@ -203,13 +203,22 @@ internal class ServerCertificateSelector : IServerCertificateSelector
                             foreach (var (tlsType, secretNamespacedName, hostName) in certificateSecretAndHostNames
                                          .IngressTlsProperties ?? [])
                             {
-                                if (_hostNameTlsCache.TryGetValue(hostName, out var secretNames))
+                                switch (tlsType)
                                 {
-                                    secretNames.Remove(secretNamespacedName);
-                                    if (secretNames.Count == 0)
-                                    {
-                                        _hostNameTlsCache.Remove(hostName);
-                                    }
+                                    case IngressTlsType.CatchAllCertificate:
+                                        _catchAllTlsCache.Remove(secretNamespacedName);
+                                        break;
+                                    case IngressTlsType.NormalCertificate:
+                                        if (_hostNameTlsCache.TryGetValue(hostName, out var secretNames))
+                                        {
+                                            secretNames.Remove(secretNamespacedName);
+                                            if (secretNames.Count == 0)
+                                            {
+                                                _hostNameTlsCache.Remove(hostName);
+                                            }
+                                        }
+
+                                        break;
                                 }
                             }
                         }

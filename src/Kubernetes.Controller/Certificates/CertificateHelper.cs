@@ -39,7 +39,7 @@ public class CertificateHelper : ICertificateHelper
             var certString = EnsurePemFormat(cert, "CERTIFICATE");
             var privateString = EnsurePemFormat(privateKey, "PRIVATE KEY");
 
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             {
                 // Cert needs converting. Read https://github.com/dotnet/runtime/issues/23749#issuecomment-388231655
                 using var convertedCertificate = X509Certificate2.CreateFromPem(certString, privateString);
