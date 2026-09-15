@@ -56,25 +56,53 @@ internal class ServerCertificateSelector : IServerCertificateSelector
                 return _defaultCertificate;
             }
 
-            if (TryGetCertificate(domainName, out var certificate))
+            if (TryGetExactMatchCertificate(domainName, out var chosenCertificate))
             {
-                return certificate;
+                return chosenCertificate;
             }
 
-            var wildcardDomainName = ConstructWildcardDomainName(domainName);
-            if (wildcardDomainName is not null && TryGetCertificate(wildcardDomainName, out var wildcardCertificate))
+            if (TryGetWildcardCertificate(domainName, out chosenCertificate))
             {
-                return wildcardCertificate;
+                return chosenCertificate;
             }
 
             _logger.LogDebug($"No certificate matched {domainName}; using default certificate.");
 
-            if (_defaultCertificate is null)
+            if (TryGetDefaultCertificate(out chosenCertificate))
             {
-                _logger.LogWarning($"No default certificate is loaded yet; cannot complete TLS for {domainName}");
+                return chosenCertificate;
             }
-            return _defaultCertificate;
+
+            _logger.LogWarning($"No default certificate is loaded yet; cannot complete TLS for {domainName}");
+            return null;
         }
+    }
+
+    private bool TryGetWildcardCertificate(string domainName, out X509Certificate2 certificate)
+    {
+        certificate = null;
+
+        var wildcardDomainName = ConstructWildcardDomainName(domainName);
+        if (wildcardDomainName is null || !TryGetExactMatchCertificate(wildcardDomainName, out var wildcardCertificate))
+        {
+            return false;
+        }
+
+        certificate = wildcardCertificate;
+        return true;
+    }
+
+    private bool TryGetDefaultCertificate(out X509Certificate2 certificate)
+    {
+        certificate = null;
+
+        if (_defaultCertificate is null)
+        {
+            return false;
+        }
+
+        certificate = _defaultCertificate;
+        return true;
     }
 
     public void RemoveCertificate(NamespacedName certificateName)
@@ -174,7 +202,7 @@ internal class ServerCertificateSelector : IServerCertificateSelector
         }
     }
 
-    private bool TryGetCertificate(string domainName, out X509Certificate2 certificate)
+    private bool TryGetExactMatchCertificate(string domainName, out X509Certificate2 certificate)
     {
         if (_hostNameTlsCache.TryGetValue(domainName, out var namespacedNameList))
         {
