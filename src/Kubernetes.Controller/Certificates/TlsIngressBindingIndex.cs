@@ -37,18 +37,18 @@ internal record TlsHostBindingSnapshot(
             foreach (var hostGroup in bindings.GroupBy(
                          static binding => binding.Hostname, StringComparer.OrdinalIgnoreCase))
             {
+                if (secretsByHost.TryGetValue(hostGroup.Key, out var existingSecret))
+                {
+                    logCollision(hostGroup.Key, namespacedName, existingSecret);
+                    continue;
+                }
+
                 var winningSecret = hostGroup.Select(static binding => binding.Secret)
                     .OrderBy(static secret => secret.ToString(), StringComparer.Ordinal).First();
 
                 if (hostGroup.Skip(1).Any())
                 {
                     logCollision(hostGroup.Key, namespacedName, winningSecret);
-                }
-
-                if (secretsByHost.TryGetValue(hostGroup.Key, out var existingSecret))
-                {
-                    logCollision(hostGroup.Key, namespacedName, existingSecret);
-                    continue;
                 }
 
                 secretsByHost.Add(hostGroup.Key, winningSecret);
@@ -135,15 +135,13 @@ public class TlsIngressBindingIndex(ILogger<TlsIngressBindingIndex> logger) : IT
                 continue;
             }
 
-            // var hosts = tls.Hosts is { Count: > 0 }
-            //     ? tls.Hosts
-            //     : specification?.Rules?.Select(static rule => rule.Host)
-            //         .Where(static host => !string.IsNullOrWhiteSpace(host)).ToArray() ?? [];
-            var hosts = tls.Hosts is { Count: > 0 }
-                ? tls.Hosts
-                : throw new NotImplementedException("Will implement later.");
+            // Skip the ingress Tls having no specified hosts.
+            if (tls.Hosts is not { Count: > 0 })
+            {
+                continue;
+            }
 
-            foreach (var host in hosts.Where(static host => !string.IsNullOrWhiteSpace(host)))
+            foreach (var host in tls.Hosts.Where(static host => !string.IsNullOrWhiteSpace(host)))
             {
                 bindings.Add(new TlsHostBinding(host, new NamespacedName(@namespace, tls.SecretName)));
             }
