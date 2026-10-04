@@ -21,16 +21,27 @@ namespace Yarp.Kubernetes.Controller.Caching;
 public class IngressCache : ICache
 {
     private readonly object _sync = new object();
-    private readonly Dictionary<string, IngressClassData> _ingressClassData = new Dictionary<string, IngressClassData>();
+
+    private readonly Dictionary<string, IngressClassData>
+        _ingressClassData = new Dictionary<string, IngressClassData>();
+
     private readonly Dictionary<string, NamespaceCache> _namespaceCaches = new Dictionary<string, NamespaceCache>();
     private readonly YarpOptions _options;
     private readonly IServerCertificateSelector _certificateSelector;
     private readonly ICertificateHelper _certificateHelper;
+    private readonly TlsIngressBindingIndex _tlsIngressBindingIndex;
+    private readonly TlsSecretCertificateStore _tlsSecretCertificateStore;
     private readonly ILogger<IngressCache> _logger;
 
     private bool _isDefaultController;
 
-    public IngressCache(IOptions<YarpOptions> options, IServerCertificateSelector certificateSelector, ICertificateHelper certificateHelper, ILogger<IngressCache> logger)
+    public IngressCache(
+        IOptions<YarpOptions> options,
+        IServerCertificateSelector certificateSelector,
+        ICertificateHelper certificateHelper,
+        TlsIngressBindingIndex tlsIngressBindingIndex,
+        TlsSecretCertificateStore tlsSecretCertificateStore,
+        ILogger<IngressCache> logger)
     {
         ArgumentNullException.ThrowIfNull(options?.Value);
         ArgumentNullException.ThrowIfNull(certificateSelector);
@@ -40,6 +51,8 @@ public class IngressCache : ICache
         _options = options.Value;
         _certificateSelector = certificateSelector;
         _certificateHelper = certificateHelper;
+        _tlsIngressBindingIndex = tlsIngressBindingIndex;
+        _tlsSecretCertificateStore = tlsSecretCertificateStore;
         _logger = logger;
     }
 
@@ -69,6 +82,8 @@ public class IngressCache : ICache
             }
 
             _isDefaultController = _ingressClassData.Values.Any(ic => ic.IsDefault);
+
+            _tlsIngressBindingIndex.SynchronizeLatestIngresses(GetIngresses());
         }
     }
 
@@ -76,7 +91,26 @@ public class IngressCache : ICache
     {
         ArgumentNullException.ThrowIfNull(ingress);
 
-        Namespace(ingress.Namespace()).Update(eventType, ingress);
+        lock (_sync)
+        {
+            // Update ingress cache before updating TLS binding cache.
+            Namespace(ingress.Namespace()).Update(eventType, ingress);
+
+            var ingressNamespacedName = NamespacedName.From(ingress);
+            var isHandledByYarpKubernetesController = GetIngresses()
+                .Any(candidate => ingressNamespacedName ==
+                                  new NamespacedName(candidate.Metadata.NamespaceProperty, candidate.Metadata.Name));
+
+            if (eventType == WatchEventType.Deleted || !isHandledByYarpKubernetesController)
+            {
+                _tlsIngressBindingIndex.RemoveIngress(ingress);
+            }
+            else if (eventType == WatchEventType.Added || eventType == WatchEventType.Modified)
+            {
+                _tlsIngressBindingIndex.ReplaceIngress(ingress);
+            }
+        }
+
         return true;
     }
 
@@ -95,29 +129,25 @@ public class IngressCache : ICache
     public void Update(WatchEventType eventType, V1Secret secret)
     {
         var namespacedName = NamespacedName.From(secret);
-        _logger.LogDebug("Found secret '{NamespacedName}'. Checking against default {CertificateSecretName}", namespacedName, _options.DefaultSslCertificate);
 
-        if (!string.Equals(namespacedName.ToString(), _options.DefaultSslCertificate, StringComparison.OrdinalIgnoreCase))
+        if (eventType == WatchEventType.Deleted)
+        {
+            _tlsSecretCertificateStore.Remove(namespacedName);
+            return;
+        }
+
+        if (eventType is not( WatchEventType.Added or WatchEventType.Modified))
         {
             return;
         }
 
-        _logger.LogInformation("Found secret `{NamespacedName}` to use as default certificate for HTTPS traffic", namespacedName);
-
-        var certificate = _certificateHelper.ConvertCertificate(namespacedName, secret);
-        if (certificate is null)
+        var (leafCertificate, intermediateCertificates) = _certificateHelper.ConvertCertificate(namespacedName, secret);
+        if (leafCertificate is null || intermediateCertificates is null)
         {
             return;
         }
 
-        if (eventType == WatchEventType.Added || eventType == WatchEventType.Modified)
-        {
-            _certificateSelector.AddCertificate(namespacedName, certificate);
-        }
-        else if (eventType == WatchEventType.Deleted)
-        {
-            _certificateSelector.RemoveCertificate(namespacedName);
-        }
+        _tlsSecretCertificateStore.Replace(namespacedName, leafCertificate, intermediateCertificates);
     }
 
     public bool TryGetReconcileData(NamespacedName key, out ReconcileData data)
