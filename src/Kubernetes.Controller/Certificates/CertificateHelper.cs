@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using k8s.Models;
@@ -23,37 +22,63 @@ public class CertificateHelper : ICertificateHelper
         _logger = logger;
     }
 
-    public X509Certificate2 ConvertCertificate(NamespacedName namespacedName, V1Secret secret)
+    public (X509Certificate2, X509Certificate2Collection) ConvertCertificate(NamespacedName namespacedName,
+        V1Secret secret)
     {
+        if (secret?.Data is null ||
+            !secret.Data.TryGetValue(TlsCertKey, out var certificate) || certificate.Length == 0 ||
+            !secret.Data.TryGetValue(TlsPrivateKeyKey, out var privateKey) || privateKey.Length == 0)
+        {
+            return (null, null);
+        }
+
+        var certString = EnsurePemFormat(certificate, "CERTIFICATE");
+        var privateString = EnsurePemFormat(privateKey, "PRIVATE KEY");
+
+        X509Certificate2 finalLeafCertificate = null;
+        var allCertificates = new X509Certificate2Collection();
         try
         {
-            var cert = secret?.Data[TlsCertKey];
-            var privateKey = secret?.Data[TlsPrivateKeyKey];
-
-            if (cert == null || cert.Length == 0 || privateKey == null || privateKey.Length == 0)
+            finalLeafCertificate = X509Certificate2.CreateFromPem(certString, privateString);
+            if (OperatingSystem.IsWindows())
             {
-                _logger.LogWarning("TLS secret '{NamespacedName}' contains invalid data.", namespacedName);
-                return null;
+                using var oldLeaf = finalLeafCertificate;
+                finalLeafCertificate = new X509Certificate2(finalLeafCertificate.Export(X509ContentType.Pkcs12));
             }
 
-            var certString = EnsurePemFormat(cert, "CERTIFICATE");
-            var privateString = EnsurePemFormat(privateKey, "PRIVATE KEY");
-
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                // Cert needs converting. Read https://github.com/dotnet/runtime/issues/23749#issuecomment-388231655
-                using var convertedCertificate = X509Certificate2.CreateFromPem(certString, privateString);
-                return new X509Certificate2(convertedCertificate.Export(X509ContentType.Pkcs12));
-            }
-
-            return X509Certificate2.CreateFromPem(certString, privateString);
+            allCertificates.ImportFromPem(certString);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to convert secret '{NamespacedName}'", namespacedName);
+
+            finalLeafCertificate?.Dispose();
+            DisposeCertificateCollection(allCertificates);
+
+            return (null, null);
         }
 
-        return null;
+        var finalIntermediateCertificates = new X509Certificate2Collection();
+        // [0] is the key-less copy of the leaf; ownership of [1..] moved to finalCertificateCollection.
+        for (var i = 0; i < allCertificates.Count; ++i)
+        {
+            if (i == 0)
+            {
+                allCertificates[i].Dispose();
+            }
+
+            finalIntermediateCertificates.Add(allCertificates[i]);
+        }
+
+        return (finalLeafCertificate, finalIntermediateCertificates);
+    }
+
+    private static void DisposeCertificateCollection(X509Certificate2Collection certificateCollection)
+    {
+        foreach (var certificate in certificateCollection)
+        {
+            certificate.Dispose();
+        }
     }
 
     /// <summary>
