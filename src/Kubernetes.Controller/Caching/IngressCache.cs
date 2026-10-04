@@ -126,7 +126,7 @@ public class IngressCache : ICache
             return;
         }
 
-        if (eventType is not( WatchEventType.Added or WatchEventType.Modified))
+        if (eventType is not (WatchEventType.Added or WatchEventType.Modified))
         {
             return;
         }
