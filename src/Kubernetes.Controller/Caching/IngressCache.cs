@@ -22,8 +22,7 @@ public class IngressCache : ICache
 {
     private readonly object _sync = new object();
 
-    private readonly Dictionary<string, IngressClassData>
-        _ingressClassData = new Dictionary<string, IngressClassData>();
+    private readonly Dictionary<string, IngressClassData> _ingressClassData = new Dictionary<string, IngressClassData>();
 
     private readonly Dictionary<string, NamespaceCache> _namespaceCaches = new Dictionary<string, NamespaceCache>();
     private readonly YarpOptions _options;
