@@ -21,9 +21,7 @@ namespace Yarp.Kubernetes.Controller.Caching;
 public class IngressCache : ICache
 {
     private readonly object _sync = new object();
-
     private readonly Dictionary<string, IngressClassData> _ingressClassData = new Dictionary<string, IngressClassData>();
-
     private readonly Dictionary<string, NamespaceCache> _namespaceCaches = new Dictionary<string, NamespaceCache>();
     private readonly YarpOptions _options;
     private readonly ICertificateHelper _certificateHelper;
@@ -91,10 +89,7 @@ public class IngressCache : ICache
             // Update ingress cache before updating TLS binding cache.
             Namespace(ingress.Namespace()).Update(eventType, ingress);
 
-            var ingressNamespacedName = NamespacedName.From(ingress);
-            var isHandledByYarpKubernetesController = GetIngresses()
-                .Any(candidate => ingressNamespacedName ==
-                                  new NamespacedName(candidate.Metadata.NamespaceProperty, candidate.Metadata.Name));
+            var isHandledByYarpKubernetesController = IsYarpIngress(ingress);
 
             if (eventType == WatchEventType.Deleted || !isHandledByYarpKubernetesController)
             {
@@ -176,18 +171,22 @@ public class IngressCache : ICache
         return ingresses;
     }
 
-    private bool IsYarpIngress(IngressData ingress)
+    private bool IsYarpIngress(string ingressClassName)
     {
-        if (ingress.Spec.IngressClassName is null)
+        if (ingressClassName is null)
         {
             return _isDefaultController;
         }
 
         lock (_sync)
         {
-            return _ingressClassData.ContainsKey(ingress.Spec.IngressClassName);
+            return _ingressClassData.ContainsKey(ingressClassName);
         }
     }
+
+    private bool IsYarpIngress(IngressData ingress) => IsYarpIngress(ingress.Spec?.IngressClassName);
+
+    private bool IsYarpIngress(V1Ingress ingress) => IsYarpIngress(ingress.Spec?.IngressClassName);
 
     private NamespaceCache Namespace(string key)
     {
