@@ -26,4 +26,10 @@ public class YarpOptions
     /// This field is required.
     /// </summary>
     public string ControllerServiceNamespace { get; set; }
+
+    /// <summary>
+    /// Ports on which Kestrel listens for HTTPS connections.
+    /// This field is optional.
+    /// </summary>
+    public int[] HttpsListenPorts { get; set; } = [];
 }
