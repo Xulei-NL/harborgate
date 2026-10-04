@@ -26,7 +26,6 @@ public class IngressCache : ICache
 
     private readonly Dictionary<string, NamespaceCache> _namespaceCaches = new Dictionary<string, NamespaceCache>();
     private readonly YarpOptions _options;
-    private readonly IServerCertificateSelector _certificateSelector;
     private readonly ICertificateHelper _certificateHelper;
     private readonly TlsIngressBindingIndex _tlsIngressBindingIndex;
     private readonly TlsSecretCertificateStore _tlsSecretCertificateStore;
@@ -36,19 +35,16 @@ public class IngressCache : ICache
 
     public IngressCache(
         IOptions<YarpOptions> options,
-        IServerCertificateSelector certificateSelector,
         ICertificateHelper certificateHelper,
         TlsIngressBindingIndex tlsIngressBindingIndex,
         TlsSecretCertificateStore tlsSecretCertificateStore,
         ILogger<IngressCache> logger)
     {
         ArgumentNullException.ThrowIfNull(options?.Value);
-        ArgumentNullException.ThrowIfNull(certificateSelector);
         ArgumentNullException.ThrowIfNull(certificateHelper);
         ArgumentNullException.ThrowIfNull(logger);
 
         _options = options.Value;
-        _certificateSelector = certificateSelector;
         _certificateHelper = certificateHelper;
         _tlsIngressBindingIndex = tlsIngressBindingIndex;
         _tlsSecretCertificateStore = tlsSecretCertificateStore;
