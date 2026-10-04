@@ -2,6 +2,11 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Net.Security;
+using System.Security.Authentication;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http.Connections;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.DependencyInjection;
 using Yarp.Kubernetes.Controller.Certificates;
 
@@ -20,22 +25,31 @@ public static class KubernetesReverseProxyWebHostBuilderExtensions
     /// <returns>The same <see cref="IWebHostBuilder"/> for chaining.</returns>
     public static IWebHostBuilder UseKubernetesReverseProxyCertificateSelector(this IWebHostBuilder builder)
     {
-        ArgumentNullException.ThrowIfNull(builder, nameof(builder));
+        ArgumentNullException.ThrowIfNull(builder);
 
         builder.ConfigureKestrel(kestrelOptions =>
         {
-            kestrelOptions.ConfigureHttpsDefaults(httpsOptions =>
+            var selector = kestrelOptions.ApplicationServices.GetService<IServerCertificateSelector>();
+            kestrelOptions.ListenAnyIP(8080, listenOptions =>
             {
-                var selector = kestrelOptions.ApplicationServices.GetService<IServerCertificateSelector>();
                 if (selector is null)
                 {
-                    throw new InvalidOperationException("Missing required services. Did you call '.AddKubernetesReverseProxy()' when configuring services?");
+                    throw new InvalidOperationException(
+                        "Missing required services. Did you call '.AddKubernetesReverseProxy()' when configuring services?");
                 }
 
-                httpsOptions.ServerCertificateSelector = (connectionContext, domainName) =>
+                listenOptions.UseHttps(new TlsHandshakeCallbackOptions
                 {
-                    return selector.GetCertificate(connectionContext, domainName);
-                };
+                    OnConnection = tlsHandshakeCallbackContext => new ValueTask<SslServerAuthenticationOptions>(
+                        new SslServerAuthenticationOptions
+                        {
+                            ServerCertificateContext =
+                                selector.GetSslStreamCertificateContext(
+                                    tlsHandshakeCallbackContext.ClientHelloInfo.ServerName),
+                            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
+                            ApplicationProtocols = [SslApplicationProtocol.Http2, SslApplicationProtocol.Http11]
+                        })
+                });
             });
         });
 

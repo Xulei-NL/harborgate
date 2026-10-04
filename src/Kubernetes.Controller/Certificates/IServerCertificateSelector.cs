@@ -11,5 +11,5 @@ namespace Yarp.Kubernetes.Controller.Certificates;
 /// </summary>
 public interface IServerCertificateSelector
 {
-    public SslStreamCertificateContext GetSslStreamCertificateContext(ConnectionContext connectionContext, string domainName);
+    public SslStreamCertificateContext GetSslStreamCertificateContext(string domainName);
 }

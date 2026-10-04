@@ -29,8 +29,7 @@ internal class ServerCertificateSelector : IServerCertificateSelector, IDisposab
         _tlsIngressBindingIndex = tlsIngressBindingIndex;
     }
 
-    public SslStreamCertificateContext GetSslStreamCertificateContext(ConnectionContext connectionContext,
-        string domainName)
+    public SslStreamCertificateContext GetSslStreamCertificateContext(string domainName)
     {
         if (_tlsIngressBindingIndex.TryGetSecret(domainName, out var secret) &&
             _tlsSecretCertificateStore.TryAcquire(secret, out var lease) && lease is not null)
