@@ -21,7 +21,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
     private ImmutableDictionary<NamespacedName, CertificateEntry> _certificatesBySecret =
         ImmutableDictionary<NamespacedName, CertificateEntry>.Empty;
 
-    private bool _disposed;
+    private bool _isDisposed;
 
     public TlsSecretCertificateStore()
     {
@@ -85,12 +85,12 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
     {
         lock (_sync)
         {
-            if (_disposed)
+            if (_isDisposed)
             {
                 return;
             }
 
-            _disposed = true;
+            _isDisposed = true;
             _retirementCleanupTimer.Dispose();
             foreach (var certificate in _certificatesBySecret.Values)
             {
@@ -118,14 +118,14 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
     {
         lock (_sync)
         {
-            if (!_disposed)
+            if (!_isDisposed)
             {
                 AllowDisposalOfExpiredCertificatesUnderLock();
             }
         }
     }
 
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_isDisposed, this);
 
     private void AllowDisposalOfExpiredCertificatesUnderLock()
     {
