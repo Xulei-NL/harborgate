@@ -169,7 +169,7 @@ public class CertificateEntry(X509Certificate2 leafCertificate, X509Certificate2
         lock (_sync)
         {
             --_activeLeaseCount;
-            DisposeWhenUnused();
+            DisposeIfEligible();
         }
     }
 
@@ -186,11 +186,11 @@ public class CertificateEntry(X509Certificate2 leafCertificate, X509Certificate2
         lock (_sync)
         {
             _isRetirementGracePeriodElapsed = true;
-            DisposeWhenUnused();
+            DisposeIfEligible();
         }
     }
 
-    private void DisposeWhenUnused()
+    private void DisposeIfEligible()
     {
         if (_activeLeaseCount != 0 || !_isRetired || !_isRetirementGracePeriodElapsed || _isDisposed)
         {
