@@ -8,5 +8,5 @@ namespace Yarp.Kubernetes.Controller.Certificates;
 
 public interface ICertificateHelper
 {
-    X509Certificate2 ConvertCertificate(NamespacedName namespacedName, V1Secret secret);
+    public (X509Certificate2, X509Certificate2Collection) ConvertCertificate(NamespacedName namespacedName, V1Secret secret);
 }
