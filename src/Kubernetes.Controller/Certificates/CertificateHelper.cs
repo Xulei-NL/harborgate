@@ -65,6 +65,7 @@ public class CertificateHelper : ICertificateHelper
             if (i == 0)
             {
                 allCertificates[i].Dispose();
+                continue;
             }
 
             finalIntermediateCertificates.Add(allCertificates[i]);
