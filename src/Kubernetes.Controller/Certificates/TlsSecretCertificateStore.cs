@@ -43,32 +43,50 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
     public bool TryAcquire(NamespacedName secret, out TlsSecretCertificateLease lease)
     {
         ThrowIfDisposed();
-        if (!_certificatesBySecret.TryGetValue(secret, out var certificateEntry) || !certificateEntry.TryAcquire())
-        {
-            lease = null;
-            return false;
-        }
 
-        lease = new TlsSecretCertificateLease(certificateEntry);
-        return true;
+        var snapshot = Volatile.Read(ref _certificatesBySecret);
+        while (true)
+        {
+            if (snapshot is null || !snapshot.TryGetValue(secret, out var certificateEntry))
+            {
+                lease = null;
+                return false;
+            }
+
+            if (certificateEntry.TryAcquire())
+            {
+                lease = new TlsSecretCertificateLease(certificateEntry);
+                return true;
+            }
+
+            // Entry was retired, so the dictionary has already moved on; retry with the latest snapshot.
+            var latest = Volatile.Read(ref _certificatesBySecret);
+            if (ReferenceEquals(latest, snapshot))
+            {
+                lease = null;
+                return false;
+            }
+
+            snapshot = latest;
+        }
     }
 
-    public void Replace(NamespacedName secret, X509Certificate2 leafCertificate,
-        X509Certificate2Collection intermediateCertificates)
+    public void Replace(NamespacedName secret, TlsCertificateChain tlsCertificateChain)
     {
-        ArgumentNullException.ThrowIfNull(leafCertificate);
-        ArgumentNullException.ThrowIfNull(intermediateCertificates);
+        ArgumentNullException.ThrowIfNull(tlsCertificateChain);
 
-        var entry = new CertificateEntry(leafCertificate, intermediateCertificates);
+        var entry = new CertificateEntry(tlsCertificateChain);
         lock (_sync)
         {
             ThrowIfDisposed();
-            if (_certificatesBySecret.TryGetValue(secret, out var replaced))
+
+            _certificatesBySecret.TryGetValue(secret, out var replaced);
+            Volatile.Write(ref _certificatesBySecret, _certificatesBySecret.SetItem(secret, entry));
+            if (replaced is not null)
             {
                 Retire(replaced);
             }
 
-            _certificatesBySecret = _certificatesBySecret.SetItem(secret, entry);
             AllowDisposalOfExpiredCertificatesUnderLock();
         }
     }
@@ -78,10 +96,12 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
         lock (_sync)
         {
             ThrowIfDisposed();
+
             if (_certificatesBySecret.TryGetValue(secret, out var removed))
             {
+                Volatile.Write(ref _certificatesBySecret, _certificatesBySecret.Remove(secret));
                 Retire(removed);
-                _certificatesBySecret = _certificatesBySecret.Remove(secret);
+
                 AllowDisposalOfExpiredCertificatesUnderLock();
             }
         }
@@ -153,18 +173,17 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
     private readonly record struct RetiredCertificate(CertificateEntry Entry, DateTimeOffset RetiredAt);
 }
 
-internal sealed class CertificateEntry(
-    X509Certificate2 leafCertificate,
-    X509Certificate2Collection intermediateCertificates)
+internal sealed class CertificateEntry(TlsCertificateChain tlsCertificateChain)
 {
     private readonly object _sync = new();
+
     private int _activeLeaseCount;
     private bool _isRetired;
     private bool _isRetirementGracePeriodElapsed;
     private bool _isDisposed;
 
-    public X509Certificate2 LeafCertificate { get; } = leafCertificate;
-    public X509Certificate2Collection IntermediateCertificates { get; } = intermediateCertificates;
+    public X509Certificate2 LeafCertificate { get; } = tlsCertificateChain.LeafCertificate;
+    public X509Certificate2Collection IntermediateCertificates { get; } = tlsCertificateChain.IntermediateCertificates;
 
     public bool TryAcquire()
     {
@@ -211,6 +230,9 @@ internal sealed class CertificateEntry(
         }
     }
 
+    ///<summary>
+    /// Must be called under `_sync`.
+    /// </summary>
     private void ReleaseCertificatesIfEligible()
     {
         if (_activeLeaseCount != 0 || !_isRetired || !_isRetirementGracePeriodElapsed || _isDisposed)
@@ -219,12 +241,7 @@ internal sealed class CertificateEntry(
         }
 
         _isDisposed = true;
-
-        LeafCertificate.Dispose();
-        foreach (var certificate in IntermediateCertificates)
-        {
-            certificate.Dispose();
-        }
+        tlsCertificateChain.Dispose();
     }
 }
 

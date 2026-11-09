@@ -9,8 +9,7 @@ public interface ITlsSecretCertificateStore
 {
     public bool TryAcquire(NamespacedName secret, out TlsSecretCertificateLease lease);
 
-    public void Replace(NamespacedName secret, X509Certificate2 leafCertificate,
-        X509Certificate2Collection intermediateCertificates);
+    public void Replace(NamespacedName secret, TlsCertificateChain tlsCertificateChain);
 
     public void Remove(NamespacedName secret);
 }
