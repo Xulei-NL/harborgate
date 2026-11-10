@@ -31,7 +31,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
         TimeProvider timeProvider = null,
         TimeSpan? certificateRetirementGracePeriod = null)
     {
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _certificateRetirementGracePeriod = certificateRetirementGracePeriod ?? TimeSpan.FromMinutes(10);
 
