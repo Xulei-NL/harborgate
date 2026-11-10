@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using Microsoft.Extensions.Logging;
@@ -42,7 +43,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
 
     public bool TryAcquire(NamespacedName secret, out TlsSecretCertificateLease lease)
     {
-        ThrowIfDisposed();
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
         var snapshot = Volatile.Read(ref _certificatesBySecret);
         while (true)
@@ -78,7 +79,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
         var entry = new CertificateEntry(tlsCertificateChain);
         lock (_sync)
         {
-            ThrowIfDisposed();
+            ObjectDisposedException.ThrowIf(_isDisposed, this);
 
             _certificatesBySecret.TryGetValue(secret, out var replaced);
             Volatile.Write(ref _certificatesBySecret, _certificatesBySecret.SetItem(secret, entry));
@@ -87,7 +88,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
                 Retire(replaced);
             }
 
-            AllowDisposalOfExpiredCertificatesUnderLock();
+            ReleaseCertificatesPastGracePeriod();
         }
     }
 
@@ -95,14 +96,14 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
     {
         lock (_sync)
         {
-            ThrowIfDisposed();
+            ObjectDisposedException.ThrowIf(_isDisposed, this);
 
             if (_certificatesBySecret.TryGetValue(secret, out var removed))
             {
                 Volatile.Write(ref _certificatesBySecret, _certificatesBySecret.Remove(secret));
                 Retire(removed);
 
-                AllowDisposalOfExpiredCertificatesUnderLock();
+                ReleaseCertificatesPastGracePeriod();
             }
         }
     }
@@ -148,7 +149,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
             {
                 if (!_isDisposed)
                 {
-                    AllowDisposalOfExpiredCertificatesUnderLock();
+                    ReleaseCertificatesPastGracePeriod();
                 }
             }
         }
@@ -159,10 +160,10 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
         }
     }
 
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_isDisposed, this);
-
-    private void AllowDisposalOfExpiredCertificatesUnderLock()
+    private void ReleaseCertificatesPastGracePeriod()
     {
+        Debug.Assert(Monitor.IsEntered(_sync), "Caller must hold _sync.");
+
         var threshold = _timeProvider.GetUtcNow() - _certificateRetirementGracePeriod;
         while (_retiredCertificates.TryPeek(out var retiredCertificate) && retiredCertificate.RetiredAt <= threshold)
         {
