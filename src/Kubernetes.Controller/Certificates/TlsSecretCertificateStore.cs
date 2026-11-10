@@ -19,7 +19,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
 
     private readonly object _sync = new();
     private readonly Queue<RetiredCertificate> _retiredCertificates = new();
-    private readonly Timer _retirementCleanupTimer;
+    private readonly ITimer _retirementCleanupTimer;
 
     private ImmutableDictionary<NamespacedName, CertificateEntry> _certificatesBySecret =
         ImmutableDictionary<NamespacedName, CertificateEntry>.Empty;
@@ -35,7 +35,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
         _timeProvider = timeProvider ?? TimeProvider.System;
         _certificateRetirementGracePeriod = certificateRetirementGracePeriod ?? TimeSpan.FromMinutes(10);
 
-        _retirementCleanupTimer = new Timer(
+        _retirementCleanupTimer = _timeProvider.CreateTimer(
             _ => OnRetirementCleanupTimer(), null,
             _certificateRetirementGracePeriod, _certificateRetirementGracePeriod
         );
