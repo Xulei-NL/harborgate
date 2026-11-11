@@ -11,6 +11,38 @@ using Microsoft.Extensions.Logging;
 
 namespace Yarp.Kubernetes.Controller.Certificates;
 
+/// <summary>
+/// Holds the current TLS certificate chain for each Kubernetes TLS secret and disposes chains once it is safe to do so.
+/// </summary>
+/// <remarks>
+/// <para>
+/// When a secret is replaced or removed, its old chain is <em>retired</em>: new <see cref="TryAcquire"/> calls stop
+/// returning it immediately, but it is not disposed until both of the following hold:
+/// </para>
+/// <list type="number">
+/// <item>
+/// <description>
+/// <b>No active leases.</b> A <see cref="TlsSecretCertificateLease"/> keeps the chain alive while the caller holds it.
+/// This covers usage the caller can bracket with acquire/dispose.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <b>The retirement grace period has elapsed.</b> This covers usage that outlives the lease and that the caller cannot
+/// observe. For example, Kestrel's <c>ServerCertificateSelector</c> returns the certificate synchronously, so the lease
+/// is released when the callback returns, yet <c>SslStream</c> keeps using the certificate (including its private key)
+/// for the rest of the TLS handshake and may cache credentials built from it. No lease can cover that window, so the
+/// grace period is the only protection.
+/// </description>
+/// </item>
+/// </list>
+/// <para>
+/// Retired entries are kept in a FIFO queue ordered by retirement time. A periodic timer (and every
+/// <see cref="Replace"/>/<see cref="Remove"/>) dequeues entries whose grace period has elapsed and marks them as such.
+/// Whichever condition is satisfied last triggers disposal: either the grace-period sweep or the release of the last
+/// lease.
+/// </para>
+/// </remarks>
 public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
 {
     private readonly TimeSpan _certificateRetirementGracePeriod;
@@ -88,7 +120,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
                 Retire(replaced);
             }
 
-            ReleaseCertificatesPastGracePeriod();
+            DequeueElapsedRetirements();
         }
     }
 
@@ -103,7 +135,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
                 Volatile.Write(ref _certificatesBySecret, _certificatesBySecret.Remove(secret));
                 Retire(removed);
 
-                ReleaseCertificatesPastGracePeriod();
+                DequeueElapsedRetirements();
             }
         }
     }
@@ -149,7 +181,7 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
             {
                 if (!_isDisposed)
                 {
-                    ReleaseCertificatesPastGracePeriod();
+                    DequeueElapsedRetirements();
                 }
             }
         }
@@ -160,12 +192,22 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
         }
     }
 
-    private void ReleaseCertificatesPastGracePeriod()
+    /// <summary>
+    /// Ends the grace period of every retired entry that was retired at least
+    /// <see cref="_certificateRetirementGracePeriod"/> ago and removes it from the queue.
+    /// </summary>
+    /// <remarks>
+    /// This only ends the grace period; it does not force disposal. An entry that still has active leases is
+    /// dequeued but stays alive, and is disposed by <see cref="CertificateEntry.Release"/> when its last lease is
+    /// released. After dequeuing, the store no longer references the entry; the outstanding leases do.
+    /// Must be called while holding <see cref="_sync"/>.
+    /// </remarks>
+    private void DequeueElapsedRetirements()
     {
         Debug.Assert(Monitor.IsEntered(_sync), "Caller must hold _sync.");
 
-        var threshold = _timeProvider.GetUtcNow() - _certificateRetirementGracePeriod;
-        while (_retiredCertificates.TryPeek(out var retiredCertificate) && retiredCertificate.RetiredAt <= threshold)
+        var retirementCutoff = _timeProvider.GetUtcNow() - _certificateRetirementGracePeriod;
+        while (_retiredCertificates.TryPeek(out var retiredCertificate) && retiredCertificate.RetiredAt <= retirementCutoff)
         {
             _retiredCertificates.Dequeue().Entry.MarkGracePeriodElapsed();
         }
@@ -174,6 +216,11 @@ public class TlsSecretCertificateStore : ITlsSecretCertificateStore, IDisposable
     private readonly record struct RetiredCertificate(CertificateEntry Entry, DateTimeOffset RetiredAt);
 }
 
+/// <summary>
+/// Tracks the lifetime of one <see cref="TlsCertificateChain"/> and disposes it when it is retired, its grace period
+/// has elapsed, and no leases remain. See <see cref="TlsSecretCertificateStore"/> for why both leases and a grace
+/// period are needed.
+/// </summary>
 internal sealed class CertificateEntry(TlsCertificateChain tlsCertificateChain)
 {
     private readonly object _sync = new();
@@ -181,7 +228,7 @@ internal sealed class CertificateEntry(TlsCertificateChain tlsCertificateChain)
     private int _activeLeaseCount;
     private bool _isRetired;
     private bool _isRetirementGracePeriodElapsed;
-    private bool _isDisposed;
+    private bool _isChainDisposed;
 
     public X509Certificate2 LeafCertificate { get; } = tlsCertificateChain.LeafCertificate;
     public X509Certificate2Collection IntermediateCertificates { get; } = tlsCertificateChain.IntermediateCertificates;
@@ -210,7 +257,7 @@ internal sealed class CertificateEntry(TlsCertificateChain tlsCertificateChain)
             }
 
             --_activeLeaseCount;
-            ReleaseCertificatesIfEligible();
+            TryDisposeChain();
         }
     }
 
@@ -227,25 +274,33 @@ internal sealed class CertificateEntry(TlsCertificateChain tlsCertificateChain)
         lock (_sync)
         {
             _isRetirementGracePeriodElapsed = true;
-            ReleaseCertificatesIfEligible();
+            TryDisposeChain();
         }
     }
 
-    ///<summary>
-    /// Must be called under `_sync`.
+    /// <summary>
+    /// Disposes the chain if it is retired, its grace period has elapsed, and no leases remain.
+    /// Called from both <see cref="Release"/> and <see cref="MarkGracePeriodElapsed"/>, so whichever happens last
+    /// performs the disposal. Must be called while holding <see cref="_sync"/>.
     /// </summary>
-    private void ReleaseCertificatesIfEligible()
+    /// <returns><c>true</c> if this call disposed the chain; otherwise <c>false</c>.</returns>
+    private bool TryDisposeChain()
     {
-        if (_activeLeaseCount != 0 || !_isRetired || !_isRetirementGracePeriodElapsed || _isDisposed)
+        if (_activeLeaseCount != 0 || !_isRetired || !_isRetirementGracePeriodElapsed || _isChainDisposed)
         {
-            return;
+            return false;
         }
 
-        _isDisposed = true;
+        _isChainDisposed = true;
         tlsCertificateChain.Dispose();
+        return true;
     }
 }
 
+/// <summary>
+/// Keeps a certificate chain from being disposed while held. Always dispose the lease; otherwise a retired chain is
+/// never disposed explicitly and its native resources are only reclaimed by the certificates' finalizers.
+/// </summary>
 public sealed class TlsSecretCertificateLease : IDisposable
 {
     private CertificateEntry _certificateEntry;
